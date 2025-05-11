@@ -4,142 +4,177 @@
 <meta charset="UTF-8">
 <title>Cubic Bezier Generator</title>
 <style>
-  body {
-    background-color: #2c2c2c;
-    margin: 0;
-  }
-  canvas {
-    border: none;
-    background-color: #2c2c2c;
-  }
+  body { background-color: #2c2c2c; margin: 0; }
+  canvas { background-color: #2c2c2c; border: none; }
+  #sidebar { position: absolute; top: 50px; left: 130px; width: 250px; background: #3a3a3a; color: white; padding: 10px; font-family: sans-serif; border-radius: 8px; }
+  .path-header { position: relative; display: flex; align-items: center; padding: 5px; margin-bottom: 2px; cursor: pointer; }
+  .path-header.selected-header { background: #505050; }
+  .path-header:hover { background: #464646; }
+  .caret { margin-right: 5px; user-select: none; }
+  .path-header input { background: none; border: none; color: white; flex: 1; padding-right: 60px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icons { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); display: flex; gap: 5px; visibility: hidden; }
+  .path-header:hover .icons { visibility: visible; }
+  .icons button { background: none; border: none; color: white; cursor: pointer; }
+  .path-dropdown { display: none; background: #2c2c2c; padding: 5px 10px; color: #ccc; margin-bottom: 5px; border-radius: 4px; }
+  .path-dropdown.visible { display: block; }
+  .path-dropdown label { display: block; margin-top: 5px; font-size: 12px; }
+  .path-dropdown input { width: 100%; margin-top: 2px; margin-bottom: 5px; }
+  #addPath { background: none; border: none; color: white; font-size: 18px; cursor: pointer; }
 </style>
 </head>
 <body>
-<div style="display: flex; align-items: flex-start; height: 100vh;">
-  <div id="sidebar" style="position: absolute; top: 50px; left: 130px; width: 250px; background-color: #2c2c2c; color: white; padding: 10px; font-family: sans-serif;">
-    <div style="display: flex; justify-content: space-between; align-items: baseline;">
-      <span style="font-weight: bold;">Paths</span>
-      <div style="display: flex; gap: 10px; align-items: baseline;">
-        <button id="addPath" style="background: none; border: none; color: white; font-size: 18px; cursor: pointer;">+</button>
-        <button id="togglePaths" style="background: none; border: none; color: white; font-size: 14px; cursor: pointer;">⇵</button>
-      </div>
-    </div>
-    <ul id="pathList" style="list-style: none; padding-left: 10px;">
-      <!-- Path items will be inserted here -->
-    </ul>
+<div id="sidebar">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-weight:bold;">Paths</span>
+    <button id="addPath">+</button>
   </div>
+  <div id="pathList"></div>
+</div>
 <canvas id="bezierCanvas" width="1520" height="790"></canvas>
 <script>
-const canvas = document.getElementById('bezierCanvas');
-const ctx = canvas.getContext('2d');
-let curves = [];
-let history = [];
-let redoStack = [];
-let drag = { curveIdx: null, pointIdx: null };
-let selected = { curveIdx: null, pointIdx: null };
+const canvas = document.getElementById('bezierCanvas'), ctx = canvas.getContext('2d');
+let paths = [], currentPath = -1, history = [], redoStack = [];
+let drag = {}, selected = {}, isDragging = false, justDragged = false;
+const boxX = 450, boxY = 65, boxW = 650, boxH = 650;
+const bg = new Image(); bg.src = 'V5RC-HighStakes-Skills-TileColor66_71-2000x2000.png'; bg.onload = draw;
+const pathListEl = document.getElementById('pathList');
 
-const bg = new Image();
-bg.src = 'V5RC-HighStakes-Skills-TileColor66_71-2000x2000.png';
-bg.onload = () => draw();
+function newPath() {
+  return { name: `Path ${paths.length+1}`, curves: [], locked: false, visible: true, expanded: false, velocity: 0, acceleration: 0 };
+}
+function getCurves() { return currentPath >= 0 ? paths[currentPath].curves : []; }
 
-let isDragging = false;
-let justDragged = false;
+function updateSidebar() {
+  pathListEl.innerHTML = '';
+  paths.forEach((p, i) => {
+    const header = document.createElement('div');
+    header.className = 'path-header' + (i === currentPath ? ' selected-header' : '');
+    const caret = document.createElement('span'); caret.textContent = p.expanded ? '▼' : '▶'; caret.className = 'caret';
+    caret.onclick = e => { e.stopPropagation(); p.expanded = !p.expanded; updateSidebar(); };
+    const input = document.createElement('input'); input.value = p.name; input.disabled = true;
+    input.onblur = () => { input.disabled = true; p.name = input.value; };
+    const icons = document.createElement('div'); icons.className = 'icons';
+    ['✏️','🗑️','🔒','👁️'].forEach(icon => { const btn = document.createElement('button'); btn.textContent = icon; icons.append(btn); });
+    const [editBtn, delBtn, lockBtn, visBtn] = icons.children;
+    editBtn.disabled = p.locked;
+    editBtn.onclick = e => { e.stopPropagation(); input.disabled = false; input.focus(); };
+    delBtn.disabled = p.locked;
+    delBtn.style.opacity = p.locked ? 0.5 : 1;
+    delBtn.onclick = e => {
+      e.stopPropagation();
+      history.push(JSON.parse(JSON.stringify(paths)));
+      paths.splice(i, 1);
+      if (currentPath === i) currentPath = -1;
+      else if (currentPath > i) currentPath--;
+      updateSidebar(); draw();
+    };
+    lockBtn.textContent = p.locked ? '🔒' : '🔓';
+    lockBtn.onclick = e => { e.stopPropagation(); p.locked = !p.locked; updateSidebar(); };
+    visBtn.textContent = p.visible ? '👁️' : '🚫';
+    visBtn.onclick = e => { e.stopPropagation(); p.visible = !p.visible; draw(); updateSidebar(); };
+    header.onclick = () => { currentPath = i; selected = {}; updateSidebar(); draw(); };
+    header.append(caret, input, icons);
+    pathListEl.append(header);
+
+    if (p.expanded) {
+      const dd = document.createElement('div'); dd.className = 'path-dropdown visible';
+      const vLabel = document.createElement('label'); vLabel.textContent = 'Velocity:';
+      const vInput = document.createElement('input'); vInput.type='number'; vInput.step='any'; vInput.value=p.velocity;
+      vInput.onchange = () => { p.velocity = parseFloat(vInput.value); };
+      const aLabel = document.createElement('label'); aLabel.textContent = 'Acceleration:';
+      const aInput = document.createElement('input'); aInput.type='number'; aInput.step='any'; aInput.value=p.acceleration;
+      aInput.onchange = () => { p.acceleration = parseFloat(aInput.value); };
+      dd.append(vLabel, vInput, aLabel, aInput);
+      pathListEl.append(dd);
+    }
+  });
+}
+
+document.getElementById('addPath').onclick = () => {
+  history.push(JSON.parse(JSON.stringify(paths)));
+  paths.push(newPath());
+  currentPath = paths.length-1;
+  selected = {};
+  updateSidebar(); draw();
+};
 
 canvas.addEventListener('click', e => {
-  const rect = canvas.getBoundingClientRect();
-  const baseX = e.clientX - rect.left;
-  const baseY = e.clientY - rect.top;
-
-  // Check if clicking a control point to select
-  for (let i = 0; i < curves.length; i++) {
-    for (let j = 0; j < 4; j++) {
-      if (Math.hypot(curves[i][j].x - baseX, curves[i][j].y - baseY) < 10) {
-        selected = { curveIdx: i, pointIdx: j };
-        draw();
-        return;
-      }
-    }
-  }
-
-  if (isDragging || justDragged) {
-    justDragged = false;
-    return;
-  }
-
-  const boxX = 450, boxY = 20, boxW = 650, boxH = 650;
-  if (baseX < boxX || baseX > boxX + boxW || baseY < boxY || baseY > boxY + boxH) return;
-
-  const centerX = boxX + boxW / 2;
-  const centerY = boxY + boxH / 2;
-  const newCurve = [
-    { x: baseX, y: baseY },
-    { x: (baseX + centerX) / 2, y: baseY - 50 },
-    { x: (baseX + centerX) / 2, y: centerY + 50 },
-    { x: centerX, y: centerY }
-  ];
-  history.push(curves.map(c => c.map(p => ({...p}))));
-  curves.push(newCurve);
-  draw();
+  const {x,y} = getMouse(e);
+  if (isDragging || justDragged || !hitCanvas(x,y)) return;
+  if (currentPath>=0 && paths[currentPath].locked) return;
+  history.push(JSON.parse(JSON.stringify(paths)));
+  if (currentPath<0) { paths.push(newPath()); currentPath = paths.length-1; }
+  const curves = getCurves(), cx=boxX+boxW/2, cy=boxY+boxH/2;
+  const nc = curves.length===0
+    ? [{x:cx,y:cy},{x:(cx+x)/2,y:cy-50},{x:(cx+x)/2,y:cy+50},{x,y}]
+    : (()=>{ const p=curves[curves.length-1], dx=p[3].x-p[2].x, dy=p[3].y-p[2].y;
+        return [{...p[3]},{x:p[3].x+dx,y:p[3].y+dy},{x:(p[3].x+x)/2,y:(p[3].y+y)/2},{x,y}]; })();
+  curves.push(nc);
+  selected = {curveIdx:curves.length-1, pointIdx:3};
+  updateSidebar(); draw();
 });
 
 canvas.addEventListener('mousedown', e => {
-  history.push(curves.map(c => c.map(p => ({ ...p }))));
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-  for (let i = 0; i < curves.length; i++) {
-    for (let j = 0; j < 4; j++) {
-      if (Math.hypot(curves[i][j].x - x, curves[i][j].y - y) < 10) {
-        drag = { curveIdx: i, pointIdx: j };
-        selected = { curveIdx: i, pointIdx: j };
-        isDragging = true;
-        return;
+  const {x,y} = getMouse(e);
+  if (isDragging) return;
+  for (let pi=0; pi<paths.length; pi++) {
+    const p = paths[pi]; if (p.locked||!p.visible) continue;
+    for (let i=0; i<p.curves.length; i++) for (let j=0; j<4; j++) {
+      if (ptDist(p.curves[i][j], x,y) < 8) {
+        history.push(JSON.parse(JSON.stringify(paths)));
+        currentPath = pi;
+        drag = {curveIdx:i, pointIdx:j, isJoin:(j===3&&i<p.curves.length-1)||(j===0&&i>0)};
+        selected = {curveIdx:i, pointIdx:j}; isDragging=true;
+        updateSidebar(); return;
       }
     }
   }
 });
 
 canvas.addEventListener('mousemove', e => {
-  if (drag.curveIdx === null) return;
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-
-  const boxX = 450, boxY = 20, boxW = 650, boxH = 650;
-  if (x < boxX || x > boxX + boxW || y < boxY || y > boxY + boxH) return;
-
-  curves[drag.curveIdx][drag.pointIdx] = { x, y };
-  draw();
-});
-
-canvas.addEventListener('mouseup', () => {
-  draw();
-  selected = { curveIdx: null, pointIdx: null };
-  if (drag.curveIdx !== null) {
-    justDragged = true;
-    setTimeout(() => justDragged = false, 0);
-  }
-  drag = { curveIdx: null, pointIdx: null };
-  isDragging = false;
-});
-
-canvas.addEventListener('contextmenu', e => {
-  e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-  for (let i = 0; i < curves.length; i++) {
-    const curve = curves[i];
-    const distance = pointToBezierDistance(x, y, curve);
-    if (distance < 10) {
-      history.push(curves.map(c => c.map(p => ({...p}))));
-      curves.splice(i, 1);
-      draw();
-      return;
+  if (!isDragging) return;
+  const {x,y} = getMouse(e);
+  if (!hitCanvas(x,y)) return;
+  const curves = getCurves(), {curveIdx, pointIdx, isJoin} = drag;
+  const old = curves[curveIdx][pointIdx];
+  const dx = x - old.x, dy = y - old.y;
+  if (isJoin) {
+    if (pointIdx===3) {
+      curves[curveIdx][3] = {x,y}; curves[curveIdx+1][0] = {x,y};
+      curves[curveIdx][2].x += dx; curves[curveIdx][2].y += dy;
+      curves[curveIdx+1][1].x += dx; curves[curveIdx+1][1].y += dy;
+    } else {
+      curves[curveIdx][0] = {x,y}; curves[curveIdx-1][3] = {x,y};
+      curves[curveIdx][1].x += dx; curves[curveIdx][1].y += dy;
+      curves[curveIdx-1][2].x += dx; curves[curveIdx-1][2].y += dy;
     }
-    for (let j = 0; j < 4; j++) {
-      if (Math.hypot(curve[j].x - x, curve[j].y - y) < 10) {
-        curves.splice(i, 1);
+  } else {
+    curves[curveIdx][pointIdx] = {x,y};
+    if (pointIdx===0) { curves[curveIdx][1].x += dx; curves[curveIdx][1].y += dy; }
+    else if (pointIdx===3) { curves[curveIdx][2].x += dx; curves[curveIdx][2].y += dy; }
+  }
+  draw();
+});
+
+canvas.addEventListener('mouseup', () => { if (drag.curveIdx!=null) justDragged = true; setTimeout(()=>justDragged=false,0); isDragging=false; drag={}; });
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault(); const {x,y} = getMouse(e);
+  for (let pi=0; pi<paths.length; pi++) {
+    const p = paths[pi]; if (p.locked||!p.visible) continue;
+    for (let i=0; i<p.curves.length; i++) {
+      const c = p.curves[i];
+      if (pathHit(c, x,y) && !(i<p.curves.length-1 && ptDist(c[3],x,y)<8)) {
+        history.push(JSON.parse(JSON.stringify(paths)));
+        currentPath = pi;
+        p.curves.splice(i,1);
+        if (p.curves.length === 0) {
+          paths.splice(pi, 1);
+          currentPath = paths.length
+            ? Math.min(pi, paths.length - 1)
+            : -1;
+        }
+        selected = {};
+        updateSidebar();
         draw();
         return;
       }
@@ -147,86 +182,50 @@ canvas.addEventListener('contextmenu', e => {
   }
 });
 
-function pointToBezierDistance(x, y, [p0, p1, p2, p3]) {
-  let minDist = Infinity;
-  for (let t = 0; t <= 1; t += 0.01) {
-    const cx = bezierPoint(p0.x, p1.x, p2.x, p3.x, t);
-    const cy = bezierPoint(p0.y, p1.y, p2.y, p3.y, t);
-    const d = Math.hypot(cx - x, cy - y);
-    if (d < minDist) minDist = d;
-  }
-  return minDist;
-}
-
-function bezierPoint(p0, p1, p2, p3, t) {
-  return (
-    (1 - t) ** 3 * p0 +
-    3 * (1 - t) ** 2 * t * p1 +
-    3 * (1 - t) * t ** 2 * p2 +
-    t ** 3 * p3
-  );
-}
-
-function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  const boxX = 450, boxY = 20, boxW = 650, boxH = 650;
-  const frameThickness = 10;
-  ctx.fillStyle = '#111059';
-  ctx.fillRect(boxX - frameThickness, boxY - frameThickness, boxW + 2 * frameThickness, frameThickness);
-  ctx.fillRect(boxX - frameThickness, boxY + boxH, boxW + 2 * frameThickness, frameThickness);
-  ctx.fillRect(boxX - frameThickness, boxY, frameThickness, boxH);
-  ctx.fillRect(boxX + boxW, boxY, frameThickness, boxH);
-  ctx.drawImage(bg, boxX, boxY, boxW, boxH);
-
-  for (let i = 0; i < curves.length; i++) {
-    const curve = curves[i];
-    if (curve.length < 4) continue;
-
-    ctx.beginPath();
-    ctx.moveTo(curve[0].x, curve[0].y);
-    ctx.lineTo(curve[1].x, curve[1].y);
-    ctx.moveTo(curve[2].x, curve[2].y);
-    ctx.lineTo(curve[3].x, curve[3].y);
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(curve[0].x, curve[0].y);
-    ctx.bezierCurveTo(curve[1].x, curve[1].y, curve[2].x, curve[2].y, curve[3].x, curve[3].y);
-    ctx.strokeStyle = '#00ff00';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    for (let j = 0; j < curve.length; j++) {
-      const p = curve[j];
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-      if (selected.curveIdx === i && selected.pointIdx === j) {
-        ctx.fillStyle = 'rgba(255, 255, 0, 1)';
-      } else {
-        ctx.fillStyle = 'rgba(128, 0, 128, 0.85)';
-      }
-      ctx.fill();
-    }
-  }
-}
 document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key === 'z') {
-    if (history.length > 0) {
-      redoStack.push(curves.map(c => c.map(p => ({ ...p }))));
-      curves = history.pop();
-      draw();
-    }
-  } else if (e.ctrlKey && (e.key === 'y' || e.key === 'Y')) {
-    if (redoStack.length > 0) {
-      history.push(curves.map(c => c.map(p => ({ ...p }))));
-      curves = redoStack.pop();
-      draw();
-    }
+  if (e.ctrlKey && e.key==='z' && history.length) {
+    redoStack.push(JSON.parse(JSON.stringify(paths)));
+    paths = history.pop(); currentPath = paths.length-1;
+    updateSidebar(); draw();
+  } else if (e.ctrlKey && (e.key==='y'||e.key==='Y') && redoStack.length) {
+    history.push(JSON.parse(JSON.stringify(paths)));
+    paths = redoStack.pop(); currentPath = paths.length-1;
+    updateSidebar(); draw();
   }
 });
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const t=10; ctx.fillStyle='#111059';
+  ctx.fillRect(boxX-t,boxY-t,boxW+2*t,t);
+  ctx.fillRect(boxX-t,boxY+boxH,boxW+2*t,t);
+  ctx.fillRect(boxX-t,boxY,t,boxH);
+  ctx.fillRect(boxX+boxW,boxY,t,boxH);
+  ctx.drawImage(bg, boxX, boxY, boxW, boxH);
+  paths.forEach(p => { if (!p.visible) return; p.curves.forEach((c,i) => drawCurve(c,i)); });
+}
+
+function drawCurve(c,i) {
+  if (c.length<4) return;
+  ctx.beginPath(); ctx.moveTo(c[0].x,c[0].y); ctx.lineTo(c[1].x,c[1].y);
+  ctx.moveTo(c[2].x,c[2].y); ctx.lineTo(c[3].x,c[3].y);
+  ctx.strokeStyle='#ffffff'; ctx.lineWidth=2; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(c[0].x,c[0].y);
+  ctx.bezierCurveTo(c[1].x,c[1].y,c[2].x,c[2].y,c[3].x,c[3].y);
+  ctx.strokeStyle='#00ff00'; ctx.lineWidth=3; ctx.stroke();
+  c.forEach((p,j) => {
+    ctx.beginPath(); ctx.arc(p.x,p.y,8,0,Math.PI*2);
+    ctx.fillStyle=(i===0&&j===0)?'#ffffff':'rgba(128,0,128,0.85)'; ctx.fill();
+  });
+}
+
+function getMouse(e) { const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+function hitCanvas(x,y) { return x>=boxX && x<=boxX+boxW && y>=boxY && y<=boxY+boxH; }
+function ptDist(p,x,y) { return Math.hypot(p.x-x,p.y-y); }
+function pathHit(c,x,y) { for (let t=0;t<=1;t+=0.01) if (Math.hypot(bez(c[0].x,c[1].x,c[2].x,c[3].x,t)-x, bez(c[0].y,c[1].y,c[2].y,c[3].y,t)-y)<8) return true; return false; }
+function bez(a,b,c,d,t) { return (1-t)**3*a + 3*(1-t)**2*t*b + 3*(1-t)*t**2*c + t**3*d; }
+
+updateSidebar();
 </script>
 </body>
 </html>
